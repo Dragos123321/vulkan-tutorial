@@ -47,6 +47,7 @@ pub unsafe fn create_logical_device(instance: &Instance, data: &mut AppData) -> 
     let device = instance.create_device(data.physical_device, &info, None)?;
 
     data.graphics_queue = device.get_device_queue(indices.graphics, 0);
+    data.present_queue = device.get_device_queue(indices.present, 0);
 
     Ok(device)
 }

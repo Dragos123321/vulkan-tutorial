@@ -132,7 +132,7 @@ pub unsafe fn create_swapchain_image_views(device: &Device, data: &mut AppData) 
     data.swapchain_image_views = data
         .swapchain_images
         .iter()
-        .map(|image| {
+        .map(|i| {
             let components = vk::ComponentMapping::builder()
                 .r(vk::ComponentSwizzle::IDENTITY)
                 .g(vk::ComponentSwizzle::IDENTITY)
@@ -147,7 +147,7 @@ pub unsafe fn create_swapchain_image_views(device: &Device, data: &mut AppData) 
                 .layer_count(1);
 
             let info = vk::ImageViewCreateInfo::builder()
-                .image(*image)
+                .image(*i)
                 .view_type(vk::ImageViewType::_2D)
                 .format(data.swapchain_format)
                 .components(components)

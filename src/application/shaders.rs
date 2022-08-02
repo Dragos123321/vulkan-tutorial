@@ -60,18 +60,12 @@ pub unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()>
 
     let attachement = vk::PipelineColorBlendAttachmentState::builder()
         .color_write_mask(vk::ColorComponentFlags::all())
-        .blend_enable(true)
-        .src_color_blend_factor(vk::BlendFactor::SRC_ALPHA)
-        .dst_alpha_blend_factor(vk::BlendFactor::ONE_MINUS_SRC_ALPHA)
-        .color_blend_op(vk::BlendOp::ADD)
-        .src_alpha_blend_factor(vk::BlendFactor::ONE)
-        .dst_alpha_blend_factor(vk::BlendFactor::ZERO)
-        .alpha_blend_op(vk::BlendOp::ADD);
+        .blend_enable(false);
 
     let attachements = &[attachement];
     let color_blend_state = vk::PipelineColorBlendStateCreateInfo::builder()
         .logic_op_enable(false)
-        .logic_op(vk::LogicOp::AND)
+        .logic_op(vk::LogicOp::COPY)
         .attachments(attachements)
         .blend_constants([0.0, 0.0, 0.0, 0.0]);
 
@@ -105,7 +99,7 @@ unsafe fn create_shader_module(device: &Device, bytecode: &[u8]) -> Result<vk::S
     let bytecode = Vec::<u8>::from(bytecode);
     let (prefix, code, suffix) = bytecode.align_to::<u32>();
 
-    if !prefix.is_empty() && !suffix.is_empty() {
+    if !prefix.is_empty() || !suffix.is_empty() {
         return Err(anyhow!("Shader bytecode is not properly aligned."));
     }
 
