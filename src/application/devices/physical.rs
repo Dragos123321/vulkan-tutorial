@@ -21,6 +21,7 @@ pub unsafe fn pick_physical_device(instance: &Instance, app_data: &mut AppData) 
         } else {
             info!("Selected physical device (`{}`)", properties.device_name);
             app_data.physical_device = physical_device;
+            app_data.msaa_samples = get_max_msaa_samples(instance, app_data);
             return Ok(());
         }
     }
@@ -47,6 +48,10 @@ pub unsafe fn check_physical_device(
         return Err(anyhow!(SuitabilityError(
             "Missing geometry shader support."
         )));
+    }
+
+    if features.sampler_anisotropy != vk::TRUE {
+        return Err(anyhow!(SuitabilityError("No sampler anisotropy.")));
     }
 
     QueueFamilyIndices::get(instance, data, physical_device)?;
@@ -78,4 +83,22 @@ pub unsafe fn check_physical_device_extensions(
             "Missing required device extensions."
         )))
     }
+}
+
+pub unsafe fn get_max_msaa_samples(instance: &Instance, data: &AppData) -> vk::SampleCountFlags {
+    let properties = instance.get_physical_device_properties(data.physical_device);
+    let counts = properties.limits.framebuffer_color_sample_counts
+        & properties.limits.framebuffer_depth_sample_counts;
+    [
+        vk::SampleCountFlags::_64,
+        vk::SampleCountFlags::_32,
+        vk::SampleCountFlags::_16,
+        vk::SampleCountFlags::_8,
+        vk::SampleCountFlags::_4,
+        vk::SampleCountFlags::_2,
+    ]
+    .iter()
+    .cloned()
+    .find(|c| counts.contains(*c))
+    .unwrap_or(vk::SampleCountFlags::_1)
 }

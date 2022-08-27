@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 
+use super::vertex::Vertex;
 use super::AppData;
 
 use vulkanalia::prelude::v1_0::*;
@@ -21,7 +22,11 @@ pub unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()>
         .module(frag_shader_module)
         .name(b"main\0");
 
-    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder();
+    let binding_descriptions = &[Vertex::binding_description()];
+    let attribute_descriptions = Vertex::attribute_description();
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo::builder()
+        .vertex_binding_descriptions(binding_descriptions)
+        .vertex_attribute_descriptions(&attribute_descriptions);
 
     let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo::builder()
         .topology(vk::PrimitiveTopology::TRIANGLE_LIST)
@@ -51,12 +56,12 @@ pub unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()>
         .polygon_mode(vk::PolygonMode::FILL)
         .line_width(1.0)
         .cull_mode(vk::CullModeFlags::BACK)
-        .front_face(vk::FrontFace::CLOCKWISE)
+        .front_face(vk::FrontFace::COUNTER_CLOCKWISE)
         .depth_bias_enable(false);
 
     let multisample_state = vk::PipelineMultisampleStateCreateInfo::builder()
         .sample_shading_enable(false)
-        .rasterization_samples(vk::SampleCountFlags::_1);
+        .rasterization_samples(data.msaa_samples);
 
     let attachement = vk::PipelineColorBlendAttachmentState::builder()
         .color_write_mask(vk::ColorComponentFlags::all())
@@ -69,8 +74,18 @@ pub unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()>
         .attachments(attachements)
         .blend_constants([0.0, 0.0, 0.0, 0.0]);
 
-    let layout_info = vk::PipelineLayoutCreateInfo::builder();
+    let set_layouts = &[data.descriptor_set_layout];
+    let layout_info = vk::PipelineLayoutCreateInfo::builder().set_layouts(set_layouts);
     data.pipeline_layout = device.create_pipeline_layout(&layout_info, None)?;
+
+    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo::builder()
+        .depth_test_enable(true)
+        .depth_write_enable(true)
+        .depth_compare_op(vk::CompareOp::LESS)
+        .depth_bounds_test_enable(false)
+        .min_depth_bounds(0.0)
+        .max_depth_bounds(1.0)
+        .stencil_test_enable(false);
 
     let stages = &[vert_stage, frag_stage];
     let info = vk::GraphicsPipelineCreateInfo::builder()
@@ -81,6 +96,7 @@ pub unsafe fn create_pipeline(device: &Device, data: &mut AppData) -> Result<()>
         .rasterization_state(&rasterization_state)
         .multisample_state(&multisample_state)
         .color_blend_state(&color_blend_state)
+        .depth_stencil_state(&depth_stencil_state)
         .layout(data.pipeline_layout)
         .render_pass(data.render_pass)
         .subpass(0);
