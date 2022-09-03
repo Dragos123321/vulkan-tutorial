@@ -94,7 +94,7 @@ impl App {
         create_render_pass(&instance, &device, &mut data)?;
         create_descriptor_set_layout(&device, &mut data)?;
         create_pipeline(&device, &mut data)?;
-        create_command_pool(&instance, &device, &mut data)?;
+        create_command_pools(&instance, &device, &mut data)?;
         create_color_objects(&instance, &device, &mut data)?;
         create_depth_objects(&instance, &device, &mut data)?;
         create_framebuffers(&device, &mut data)?;
@@ -150,6 +150,7 @@ impl App {
         }
 
         self.data.images_in_flight[image_index as usize] = self.data.in_flight_fences[self.frame];
+        self.update_command_buffer(image_index)?;
         self.update_uniform_buffer(image_index)?;
 
         let wait_semaphores = &[self.data.image_available_semaphores[self.frame]];
@@ -198,6 +199,10 @@ impl App {
 
     pub unsafe fn destroy(&mut self) {
         self.destroy_swapchain();
+        self.data
+            .command_pools
+            .iter()
+            .for_each(|p| self.device.destroy_command_pool(*p, None));
         self.device.destroy_sampler(self.data.texture_sampler, None);
         self.device
             .destroy_image_view(self.data.texture_image_view, None);
@@ -291,9 +296,6 @@ impl App {
             .iter()
             .for_each(|f| self.device.destroy_framebuffer(*f, None));
 
-        self.device
-            .free_command_buffers(self.data.command_pool, &self.data.command_buffers);
-
         self.device.destroy_pipeline(self.data.pipeline, None);
 
         self.device
@@ -309,11 +311,110 @@ impl App {
         self.device.destroy_swapchain_khr(self.data.swapchain, None);
     }
 
-    unsafe fn update_uniform_buffer(&self, image_index: usize) -> Result<()> {
+    unsafe fn update_command_buffer(&mut self, image_index: usize) -> Result<()> {
+        let command_pool = self.data.command_pools[image_index];
+        self.device
+            .reset_command_pool(command_pool, vk::CommandPoolResetFlags::empty())?;
+
+        let allocate_info = vk::CommandBufferAllocateInfo::builder()
+            .command_pool(self.data.command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+
         let time = self.start.elapsed().as_secs_f32();
 
-        let model = glm::identity();
+        let command_buffer = self.device.allocate_command_buffers(&allocate_info)?[0];
+        self.data.command_buffers[image_index] = command_buffer;
 
+        let model = glm::rotate(
+            &glm::identity(),
+            time * glm::radians(&glm::vec1(90.0))[0],
+            &glm::vec3(0.0, 0.0, 1.0),
+        );
+        let (_, model_bytes, _) = model.as_slice().align_to::<u8>();
+
+        let inheritance = vk::CommandBufferInheritanceInfo::builder();
+
+        let info = vk::CommandBufferBeginInfo::builder()
+            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
+            .inheritance_info(&inheritance);
+
+        self.device.begin_command_buffer(command_buffer, &info)?;
+
+        let render_area = vk::Rect2D::builder()
+            .offset(vk::Offset2D::default())
+            .extent(self.data.swapchain_extent);
+
+        let color_clear_value = vk::ClearValue {
+            color: vk::ClearColorValue {
+                float32: [0.0, 0.0, 0.0, 1.0],
+            },
+        };
+
+        let depth_clear_value = vk::ClearValue {
+            depth_stencil: vk::ClearDepthStencilValue {
+                depth: 1.0,
+                stencil: 0,
+            },
+        };
+
+        let clear_values = &[color_clear_value, depth_clear_value];
+        let info = vk::RenderPassBeginInfo::builder()
+            .render_pass(self.data.render_pass)
+            .framebuffer(self.data.framebuffers[image_index])
+            .clear_values(clear_values)
+            .render_area(render_area);
+
+        self.device
+            .cmd_begin_render_pass(command_buffer, &info, vk::SubpassContents::INLINE);
+        self.device.cmd_bind_pipeline(
+            command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            self.data.pipeline,
+        );
+
+        self.device
+            .cmd_bind_vertex_buffers(command_buffer, 0, &[self.data.vertex_buffer], &[0]);
+        self.device.cmd_bind_index_buffer(
+            command_buffer,
+            self.data.index_buffer,
+            0,
+            vk::IndexType::UINT32,
+        );
+        self.device.cmd_bind_descriptor_sets(
+            command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            self.data.pipeline_layout,
+            0,
+            &[self.data.descriptor_sets[image_index]],
+            &[],
+        );
+
+        self.device.cmd_push_constants(
+            command_buffer,
+            self.data.pipeline_layout,
+            vk::ShaderStageFlags::VERTEX,
+            0,
+            model_bytes,
+        );
+        self.device.cmd_push_constants(
+            command_buffer,
+            self.data.pipeline_layout,
+            vk::ShaderStageFlags::FRAGMENT,
+            64,
+            &0.5f32.to_ne_bytes()[..],
+        );
+
+        self.device
+            .cmd_draw_indexed(command_buffer, self.data.indices.len() as u32, 1, 0, 0, 0);
+
+        self.device.cmd_end_render_pass(command_buffer);
+        self.device.end_command_buffer(command_buffer)?;
+
+        Ok(())
+    }
+
+    unsafe fn update_uniform_buffer(&self, image_index: usize) -> Result<()> {
         let view = glm::look_at(
             &glm::vec3(2.0, 2.0, 2.0),
             &glm::vec3(0.0, 0.0, 0.0),
@@ -329,7 +430,7 @@ impl App {
 
         proj[(1, 1)] *= -1.0;
 
-        let ubo = UniformBufferObject { model, view, proj };
+        let ubo = UniformBufferObject { view, proj };
 
         let memory = self.device.map_memory(
             self.data.uniform_buffers_memory[image_index],
@@ -497,6 +598,7 @@ pub struct AppData {
     pipeline: vk::Pipeline,
     framebuffers: Vec<vk::Framebuffer>,
     command_pool: vk::CommandPool,
+    command_pools: Vec<vk::CommandPool>,
     command_buffers: Vec<vk::CommandBuffer>,
     image_available_semaphores: Vec<vk::Semaphore>,
     render_finished_sempahores: Vec<vk::Semaphore>,
