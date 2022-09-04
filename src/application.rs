@@ -41,7 +41,7 @@ use vulkanalia::vk::KhrSwapchainExtension;
 use vulkanalia::window as vk_window;
 
 use winit::dpi::LogicalSize;
-use winit::event::{Event, WindowEvent, ElementState, VirtualKeyCode};
+use winit::event::{ElementState, Event, VirtualKeyCode, WindowEvent};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::{Window, WindowBuilder};
 
@@ -119,7 +119,7 @@ impl App {
             frame: 0,
             resize: false,
             start: Instant::now(),
-            models: 1
+            models: 1,
         })
     }
 
@@ -313,21 +313,22 @@ impl App {
         self.device.destroy_swapchain_khr(self.data.swapchain, None);
     }
 
-    unsafe fn update_secondary_command_buffers(&mut self, image_index: usize, model_index: usize) -> Result<vk::CommandBuffer> {
+    unsafe fn update_secondary_command_buffer(
+        &mut self,
+        image_index: usize,
+        model_index: usize,
+    ) -> Result<vk::CommandBuffer> {
         let allocate_info = vk::CommandBufferAllocateInfo::builder()
             .command_pool(self.data.command_pools[image_index])
             .level(vk::CommandBufferLevel::SECONDARY)
             .command_buffer_count(1);
 
         let command_buffer = self.device.allocate_command_buffers(&allocate_info)?[0];
-        
+
         let y = (((model_index % 2) as f32) * 2.5) - 1.25;
         let z = (((model_index / 2) as f32) * -2.0) + 1.0;
 
-        let model = glm::translate::<f32>(
-            &glm::identity(), 
-            &glm::vec3(0.0, y, z)
-        );
+        let model = glm::translate::<f32>(&glm::identity(), &glm::vec3(0.0, y, z));
 
         let time = self.start.elapsed().as_secs_f32();
 
@@ -378,9 +379,9 @@ impl App {
         self.device.cmd_push_constants(
             command_buffer,
             self.data.pipeline_layout,
-   vk::ShaderStageFlags::VERTEX,
-        0,
-        model_bytes,
+            vk::ShaderStageFlags::VERTEX,
+            0,
+            model_bytes,
         );
         self.device.cmd_push_constants(
             command_buffer,
@@ -392,7 +393,7 @@ impl App {
 
         self.device
             .cmd_draw_indexed(command_buffer, self.data.indices.len() as u32, 1, 0, 0, 0);
-        
+
         self.device.end_command_buffer(command_buffer)?;
 
         Ok(command_buffer)
@@ -404,18 +405,14 @@ impl App {
             .reset_command_pool(command_pool, vk::CommandPoolResetFlags::empty())?;
 
         let allocate_info = vk::CommandBufferAllocateInfo::builder()
-            .command_pool(self.data.command_pool)
+            .command_pool(command_pool)
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(1);
 
         let command_buffer = self.device.allocate_command_buffers(&allocate_info)?[0];
         self.data.command_buffers[image_index] = command_buffer;
 
-        let inheritance = vk::CommandBufferInheritanceInfo::builder();
-
-        let info = vk::CommandBufferBeginInfo::builder()
-            .flags(vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT)
-            .inheritance_info(&inheritance);
+        let info = vk::CommandBufferBeginInfo::builder();
 
         self.device.begin_command_buffer(command_buffer, &info)?;
 
@@ -440,18 +437,23 @@ impl App {
         let info = vk::RenderPassBeginInfo::builder()
             .render_pass(self.data.render_pass)
             .framebuffer(self.data.framebuffers[image_index])
-            .clear_values(clear_values)
-            .render_area(render_area);
+            .render_area(render_area)
+            .clear_values(clear_values);
 
-        self.device
-            .cmd_begin_render_pass(command_buffer, &info, vk::SubpassContents::SECONDARY_COMMAND_BUFFERS);
+        self.device.cmd_begin_render_pass(
+            command_buffer,
+            &info,
+            vk::SubpassContents::SECONDARY_COMMAND_BUFFERS,
+        );
 
         let secondary_command_buffers = (0..self.models)
-            .map(|i| self.update_secondary_command_buffers(image_index, i))
+            .map(|i| self.update_secondary_command_buffer(image_index, i))
             .collect::<Result<Vec<_>, _>>()?;
-        self.device.cmd_execute_commands(command_buffer, &secondary_command_buffers[..]);
+        self.device
+            .cmd_execute_commands(command_buffer, &secondary_command_buffers[..]);
 
         self.device.cmd_end_render_pass(command_buffer);
+
         self.device.end_command_buffer(command_buffer)?;
 
         Ok(())
@@ -509,14 +511,15 @@ impl App {
                     unsafe { app.render(&window) }.unwrap();
                 }
 
-                Event::WindowEvent { 
-                    event: WindowEvent::KeyboardInput { input, .. }, .. 
+                Event::WindowEvent {
+                    event: WindowEvent::KeyboardInput { input, .. },
+                    ..
                 } => {
                     if input.state == ElementState::Pressed {
                         match input.virtual_keycode {
                             Some(VirtualKeyCode::Left) if app.models > 1 => app.models -= 1,
                             Some(VirtualKeyCode::Right) if app.models < 4 => app.models += 1,
-                            _ => { }
+                            _ => {}
                         }
                     }
                 }
