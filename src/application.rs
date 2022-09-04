@@ -41,7 +41,7 @@ use vulkanalia::vk::KhrSwapchainExtension;
 use vulkanalia::window as vk_window;
 
 use winit::dpi::LogicalSize;
-use winit::event::{Event, WindowEvent};
+use winit::event::{Event, WindowEvent, ElementState, VirtualKeyCode};
 use winit::event_loop::{ControlFlow, EventLoop};
 use winit::window::{Window, WindowBuilder};
 
@@ -74,6 +74,7 @@ pub struct App {
     frame: usize,
     resize: bool,
     start: Instant,
+    models: usize,
 }
 
 impl App {
@@ -118,6 +119,7 @@ impl App {
             frame: 0,
             resize: false,
             start: Instant::now(),
+            models: 1
         })
     }
 
@@ -311,6 +313,91 @@ impl App {
         self.device.destroy_swapchain_khr(self.data.swapchain, None);
     }
 
+    unsafe fn update_secondary_command_buffers(&mut self, image_index: usize, model_index: usize) -> Result<vk::CommandBuffer> {
+        let allocate_info = vk::CommandBufferAllocateInfo::builder()
+            .command_pool(self.data.command_pools[image_index])
+            .level(vk::CommandBufferLevel::SECONDARY)
+            .command_buffer_count(1);
+
+        let command_buffer = self.device.allocate_command_buffers(&allocate_info)?[0];
+        
+        let y = (((model_index % 2) as f32) * 2.5) - 1.25;
+        let z = (((model_index / 2) as f32) * -2.0) + 1.0;
+
+        let model = glm::translate::<f32>(
+            &glm::identity(), 
+            &glm::vec3(0.0, y, z)
+        );
+
+        let time = self.start.elapsed().as_secs_f32();
+
+        let model = glm::rotate(
+            &model,
+            time * glm::radians(&glm::vec1(90.0))[0],
+            &glm::vec3(0.0, 0.0, 1.0),
+        );
+        let (_, model_bytes, _) = model.as_slice().align_to::<u8>();
+
+        let opacity = (model_index + 1) as f32 * 0.25;
+        let opacity_bytes = &opacity.to_ne_bytes()[..];
+
+        let inheritance_info = vk::CommandBufferInheritanceInfo::builder()
+            .render_pass(self.data.render_pass)
+            .subpass(0)
+            .framebuffer(self.data.framebuffers[image_index]);
+
+        let info = vk::CommandBufferBeginInfo::builder()
+            .inheritance_info(&inheritance_info)
+            .flags(vk::CommandBufferUsageFlags::RENDER_PASS_CONTINUE);
+
+        self.device.begin_command_buffer(command_buffer, &info)?;
+
+        self.device.cmd_bind_pipeline(
+            command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            self.data.pipeline,
+        );
+
+        self.device
+            .cmd_bind_vertex_buffers(command_buffer, 0, &[self.data.vertex_buffer], &[0]);
+        self.device.cmd_bind_index_buffer(
+            command_buffer,
+            self.data.index_buffer,
+            0,
+            vk::IndexType::UINT32,
+        );
+        self.device.cmd_bind_descriptor_sets(
+            command_buffer,
+            vk::PipelineBindPoint::GRAPHICS,
+            self.data.pipeline_layout,
+            0,
+            &[self.data.descriptor_sets[image_index]],
+            &[],
+        );
+
+        self.device.cmd_push_constants(
+            command_buffer,
+            self.data.pipeline_layout,
+   vk::ShaderStageFlags::VERTEX,
+        0,
+        model_bytes,
+        );
+        self.device.cmd_push_constants(
+            command_buffer,
+            self.data.pipeline_layout,
+            vk::ShaderStageFlags::FRAGMENT,
+            64,
+            opacity_bytes,
+        );
+
+        self.device
+            .cmd_draw_indexed(command_buffer, self.data.indices.len() as u32, 1, 0, 0, 0);
+        
+        self.device.end_command_buffer(command_buffer)?;
+
+        Ok(command_buffer)
+    }
+
     unsafe fn update_command_buffer(&mut self, image_index: usize) -> Result<()> {
         let command_pool = self.data.command_pools[image_index];
         self.device
@@ -321,17 +408,8 @@ impl App {
             .level(vk::CommandBufferLevel::PRIMARY)
             .command_buffer_count(1);
 
-        let time = self.start.elapsed().as_secs_f32();
-
         let command_buffer = self.device.allocate_command_buffers(&allocate_info)?[0];
         self.data.command_buffers[image_index] = command_buffer;
-
-        let model = glm::rotate(
-            &glm::identity(),
-            time * glm::radians(&glm::vec1(90.0))[0],
-            &glm::vec3(0.0, 0.0, 1.0),
-        );
-        let (_, model_bytes, _) = model.as_slice().align_to::<u8>();
 
         let inheritance = vk::CommandBufferInheritanceInfo::builder();
 
@@ -366,47 +444,12 @@ impl App {
             .render_area(render_area);
 
         self.device
-            .cmd_begin_render_pass(command_buffer, &info, vk::SubpassContents::INLINE);
-        self.device.cmd_bind_pipeline(
-            command_buffer,
-            vk::PipelineBindPoint::GRAPHICS,
-            self.data.pipeline,
-        );
+            .cmd_begin_render_pass(command_buffer, &info, vk::SubpassContents::SECONDARY_COMMAND_BUFFERS);
 
-        self.device
-            .cmd_bind_vertex_buffers(command_buffer, 0, &[self.data.vertex_buffer], &[0]);
-        self.device.cmd_bind_index_buffer(
-            command_buffer,
-            self.data.index_buffer,
-            0,
-            vk::IndexType::UINT32,
-        );
-        self.device.cmd_bind_descriptor_sets(
-            command_buffer,
-            vk::PipelineBindPoint::GRAPHICS,
-            self.data.pipeline_layout,
-            0,
-            &[self.data.descriptor_sets[image_index]],
-            &[],
-        );
-
-        self.device.cmd_push_constants(
-            command_buffer,
-            self.data.pipeline_layout,
-            vk::ShaderStageFlags::VERTEX,
-            0,
-            model_bytes,
-        );
-        self.device.cmd_push_constants(
-            command_buffer,
-            self.data.pipeline_layout,
-            vk::ShaderStageFlags::FRAGMENT,
-            64,
-            &0.5f32.to_ne_bytes()[..],
-        );
-
-        self.device
-            .cmd_draw_indexed(command_buffer, self.data.indices.len() as u32, 1, 0, 0, 0);
+        let secondary_command_buffers = (0..self.models)
+            .map(|i| self.update_secondary_command_buffers(image_index, i))
+            .collect::<Result<Vec<_>, _>>()?;
+        self.device.cmd_execute_commands(command_buffer, &secondary_command_buffers[..]);
 
         self.device.cmd_end_render_pass(command_buffer);
         self.device.end_command_buffer(command_buffer)?;
@@ -416,7 +459,7 @@ impl App {
 
     unsafe fn update_uniform_buffer(&self, image_index: usize) -> Result<()> {
         let view = glm::look_at(
-            &glm::vec3(2.0, 2.0, 2.0),
+            &glm::vec3(6.0, 0.0, 2.0),
             &glm::vec3(0.0, 0.0, 0.0),
             &glm::vec3(0.0, 0.0, 1.0),
         );
@@ -464,6 +507,18 @@ impl App {
             match event {
                 Event::MainEventsCleared if !destroying && !minimized => {
                     unsafe { app.render(&window) }.unwrap();
+                }
+
+                Event::WindowEvent { 
+                    event: WindowEvent::KeyboardInput { input, .. }, .. 
+                } => {
+                    if input.state == ElementState::Pressed {
+                        match input.virtual_keycode {
+                            Some(VirtualKeyCode::Left) if app.models > 1 => app.models -= 1,
+                            Some(VirtualKeyCode::Right) if app.models < 4 => app.models += 1,
+                            _ => { }
+                        }
+                    }
                 }
 
                 Event::WindowEvent {
